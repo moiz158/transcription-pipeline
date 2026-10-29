@@ -1,5 +1,7 @@
 faster-whisper>=1.0.0
+av<19  # PyAV 19 removed an option faster-whisper still uses
+numpy
 fastapi>=0.110.0
 uvicorn>=0.29.0
 python-multipart>=0.0.9
-# System dependency: ffmpeg (install separately, e.g. `sudo apt install ffmpeg` or `choco install ffmpeg`)
+# System dependency: ffmpeg (install separately, e.g. `brew install ffmpeg`, `sudo apt install ffmpeg` or `choco install ffmpeg`)
