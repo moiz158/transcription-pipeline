@@ -10,30 +10,41 @@ Built with [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (an open-
 Audio file (WAV, MP3, M4A, ...)
    │
    ▼
-1. Accept & validate      audio_input.py        extension, size, ffprobe check, metadata
+1. Accept & validate      validate_audio()      extension, size, ffprobe check, metadata
    │
    ▼
-2. Normalize              ffmpeg                16 kHz, mono, 16-bit PCM WAV
+2. Normalize              to_wav()              ffmpeg → 16 kHz, mono, 16-bit PCM WAV
    │
    ▼
-3. Transcribe             faster-whisper + VAD  speech → text
+3. Transcribe             transcribe()          faster-whisper + VAD: speech → text
    │
    ▼
-4. Segments & output      transcribe_segments.py  timestamps per segment, JSON
+4. Segments & output      transcribe()          timestamps per segment, JSON
    │
    ▼
-5. Serve                  api.py                FastAPI endpoint
+5. Serve                  FastAPI app           POST /validate, POST /transcribe
 ```
+
+All stages live in one file, `pipeline.py`, usable both as a command-line script and as a REST API.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `audio_input.py` | Accepts an audio file and validates it (format, size, real audio stream via ffprobe). Script + `POST /upload` endpoint. |
-| `transcribe.py` | Transcribes speech into plain text. |
-| `transcribe_segments.py` | Returns the transcript with timestamps per segment; prints them and saves `transcript.json`. |
-| `api.py` | FastAPI service: `POST /transcribe` returns the transcript and segments as JSON. |
+| `pipeline.py` | The whole pipeline: validation, normalization, transcription with timestamps, CLI and FastAPI service. |
 | `requirements.txt` | Python dependencies. |
+
+### Main functions in `pipeline.py`
+
+| Function | What it does |
+|---|---|
+| `validate_audio(path)` | Accepts an audio file: checks extension, rejects empty/oversized files, uses ffprobe to confirm a real audio stream, returns metadata. |
+| `to_wav(path)` | Converts any supported input to 16 kHz mono 16-bit PCM WAV with ffmpeg. |
+| `get_model()` | Loads the Whisper model once and reuses it (cached). |
+| `transcribe(path, timestamps)` | Validates, normalizes and transcribes; returns full text and, optionally, timestamped segments. |
+| `fmt(t)` | Formats seconds as `HH:MM:SS.mmm`. |
+| `/validate`, `/transcribe`, `/health` | API endpoints. |
+| `main()` | Command-line interface. |
 
 ## Setup
 
@@ -56,14 +67,16 @@ The first run downloads the Whisper `base` model (~150 MB).
 
 ```bash
 # 1. Validate an audio file and show its metadata
-python audio_input.py sample.mp3
+python pipeline.py sample.mp3 --validate
 
 # 2. Transcribe to plain text
-python transcribe.py sample.mp3
+python pipeline.py sample.mp3
 
 # 3. Transcribe with timestamps per segment (also writes transcript.json)
-python transcribe_segments.py sample.mp3
+python pipeline.py sample.mp3 --timestamps
 ```
+
+Settings can be changed with environment variables, e.g. `WHISPER_MODEL=small python pipeline.py sample.mp3` (also `WHISPER_DEVICE`, `WHISPER_COMPUTE_TYPE`, `MAX_SIZE_MB`).
 
 Example output:
 
@@ -75,12 +88,20 @@ Example output:
 ### API
 
 ```bash
-uvicorn api:app --reload
+uvicorn pipeline:app --reload
+
+# Validate only (returns metadata)
+curl -F "file=@sample.mp3" http://localhost:8000/validate
+
+# Transcribe with timestamps
 curl -F "file=@sample.mp3" "http://localhost:8000/transcribe?timestamps=true"
 ```
 
+Error responses: `415` unsupported format, `400` empty, too large or corrupt file.
+
 ```json
 {
+  "file": "sample.mp3",
   "language": "en",
   "duration": 12.4,
   "text": "Hello, thanks for joining. Let's review the project.",
@@ -101,6 +122,10 @@ Interactive API docs are available at `http://localhost:8000/docs`.
 - **VAD filtering:** removes silence, reducing processing time and preventing Whisper from hallucinating text on silent parts.
 - **Structured JSON output:** segments include seconds (for code) and HH:MM:SS.mmm (for humans), ready for search, subtitles or summarization.
 - **Blocking endpoints use `def`, not `async def`:** the model call is CPU-bound, so FastAPI runs it in a threadpool instead of blocking the event loop.
+- **One file, one pipeline:** each stage is a small function, and both the CLI and the API call the same functions, so there is no duplicated logic.
+- **Model loaded once:** `get_model()` is cached, so the model is loaded on first use and reused across requests; validation-only calls never load it.
+- **Uploads streamed to disk:** uploaded files are copied to a temp file in chunks rather than read fully into memory, and temp files are always removed in `finally` blocks.
+- **Configurable via environment variables:** model size, device, compute type and size limit can be changed without code edits.
 
 ## Production considerations
 
